@@ -1,4 +1,4 @@
-%% Copyright (c) 2009 
+%% Copyright (c) 2009
 %% Jacob Vorreuter <jacob.vorreuter@gmail.com>
 %%
 %% Permission is hereby granted, free of charge, to any person
@@ -30,7 +30,7 @@
 -include("erlmc.hrl").
 
 %% gen_server callbacks
--export([start_link/1, init/1, handle_call/3, handle_cast/2, 
+-export([start_link/1, init/1, handle_call/3, handle_cast/2,
 	     handle_info/2, terminate/2, code_change/3]).
 
 %% API functions
@@ -51,9 +51,9 @@ start_link([Host, Port]) ->
 %%--------------------------------------------------------------------
 init([Host, Port]) ->
 	case gen_tcp:connect(Host, Port, [binary, {packet, 0}, {active, false}]) of
-        {ok, Socket} -> 
+        {ok, Socket} ->
 			{ok, Socket};
-        Error -> 
+        Error ->
 			exit(Error)
     end.
 
@@ -66,7 +66,7 @@ init([Host, Port]) ->
 %%                                      {stop, Reason, State}
 %% Description: Handling call messages
 %% @hidden
-%%--------------------------------------------------------------------    
+%%--------------------------------------------------------------------
 handle_call({get, Key}, _From, Socket) ->
     case send_recv(Socket, #request{op_code=?OP_GetK, key=list_to_binary(Key)}) of
 		{error, Err} ->
@@ -77,7 +77,7 @@ handle_call({get, Key}, _From, Socket) ->
 		        _ -> {reply, <<>>, Socket}
 		    end
 	end;
-    
+
 handle_call({add, Key, Value, Expiration}, _From, Socket) ->
     case send_recv(Socket, #request{op_code=?OP_Add, extras = <<16#deadbeef:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
 		{error, Err} ->
@@ -85,7 +85,15 @@ handle_call({add, Key, Value, Expiration}, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-    
+
+handle_call({add, Key, Value, Flags, Expiration}, _From, Socket) ->
+    case send_recv(Socket, #request{op_code=?OP_Add, extras = <<Flags:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
+        {error, Err} ->
+            {stop, Err, {error, Err}, Socket};
+        Resp ->
+            {reply, Resp#response.value, Socket}
+    end;
+
 handle_call({set, Key, Value, Expiration}, _From, Socket) ->
 	case send_recv(Socket, #request{op_code=?OP_Set, extras = <<16#deadbeef:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
 		{error, Err} ->
@@ -94,8 +102,24 @@ handle_call({set, Key, Value, Expiration}, _From, Socket) ->
     		{reply, Resp#response.value, Socket}
 	end;
 
+handle_call({set, Key, Value, Flags, Expiration}, _From, Socket) ->
+    case send_recv(Socket, #request{op_code=?OP_Set, extras = <<Flags:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
+        {error, Err} ->
+            {stop, Err, {error, Err}, Socket};
+        Resp ->
+            {reply, Resp#response.value, Socket}
+    end;
+
 handle_call({replace, Key, Value, Expiration}, _From, Socket) ->
-	case send_recv(Socket, #request{op_code=?OP_Replace, extras = <<16#deadbeef:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
+    case send_recv(Socket, #request{op_code=?OP_Replace, extras = <<16#deadbeef:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
+        {error, Err} ->
+            {stop, Err, {error, Err}, Socket};
+        Resp ->
+            {reply, Resp#response.value, Socket}
+    end;
+
+handle_call({replace, Key, Value, Flags, Expiration}, _From, Socket) ->
+	case send_recv(Socket, #request{op_code=?OP_Replace, extras = <<Flags:32, Expiration:32>>, key=list_to_binary(Key), value=Value}) of
 		{error, Err} ->
 			{stop, Err, {error, Err}, Socket};
 		Resp ->
@@ -117,7 +141,7 @@ handle_call({increment, Key, Value, Initial, Expiration}, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-	
+
 handle_call({decrement, Key, Value, Initial, Expiration}, _From, Socket) ->
 	case send_recv(Socket, #request{op_code=?OP_Decrement, extras = <<Value:64, Initial:64, Expiration:32>>, key=list_to_binary(Key)}) of
 		{error, Err} ->
@@ -141,7 +165,7 @@ handle_call({prepend, Key, Value}, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-	
+
 handle_call(stats, _From, Socket) ->
 	send(Socket, #request{op_code=?OP_Stat}),
     case collect_stats_from_socket(Socket) of
@@ -158,7 +182,7 @@ handle_call(flush, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-        
+
 handle_call({flush, Expiration}, _From, Socket) ->
 	case send_recv(Socket, #request{op_code=?OP_Flush, extras = <<Expiration:32>>}) of
 		{error, Err} ->
@@ -166,12 +190,12 @@ handle_call({flush, Expiration}, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-    
+
 handle_call(quit, _From, Socket) ->
 	send_recv(Socket, #request{op_code=?OP_Quit}),
 	gen_tcp:close(Socket),
     {stop, shutdown, undefined};
-    
+
 handle_call(version, _From, Socket) ->
 	case send_recv(Socket, #request{op_code=?OP_Version}) of
 		{error, Err} ->
@@ -179,7 +203,7 @@ handle_call(version, _From, Socket) ->
 		Resp ->
     		{reply, Resp#response.value, Socket}
 	end;
-	
+
 handle_call(_, _From, Socket) -> {reply, {error, invalid_call}, Socket}.
 
 %%--------------------------------------------------------------------
@@ -208,7 +232,7 @@ handle_info(_Info, State) -> {noreply, State}.
 %% The return value is ignored.
 %% @hidden
 %%--------------------------------------------------------------------
-terminate(_Reason, Socket) -> 
+terminate(_Reason, Socket) ->
 	case is_port(Socket) of
 		true -> gen_tcp:close(Socket);
 		false -> ok
@@ -223,13 +247,13 @@ code_change(_OldVsn, State, _Extra) -> {ok, State}.
 
 %%--------------------------------------------------------------------
 %%% Internal functions
-%%--------------------------------------------------------------------     
+%%--------------------------------------------------------------------
 collect_stats_from_socket(Socket) ->
     collect_stats_from_socket(Socket, []).
-    
+
 collect_stats_from_socket(Socket, Acc) ->
     case recv(Socket) of
-		{error, Err} -> 
+		{error, Err} ->
 			{error, Err};
         #response{body_size=0} ->
             Acc;
@@ -240,7 +264,7 @@ collect_stats_from_socket(Socket, Acc) ->
 send_recv(Socket, Request) ->
     ok = send(Socket, Request),
     recv(Socket).
-    
+
 send(Socket, Request) ->
     Bin = encode_request(Request),
     gen_tcp:send(Socket, Bin).
@@ -252,7 +276,7 @@ recv(Socket) ->
 		HdrResp ->
     		recv_body(Socket, HdrResp)
     end.
-        
+
 encode_request(Request) when is_record(Request, request) ->
     Magic = 16#80,
     Opcode = Request#request.op_code,
@@ -269,23 +293,23 @@ encode_request(Request) when is_record(Request, request) ->
 
 recv_header(Socket) ->
     decode_response_header(recv_bytes(Socket, 24)).
-  
+
 recv_body(Socket, #response{key_size = KeySize, extras_size = ExtrasSize, body_size = BodySize}=Resp) ->
     decode_response_body(recv_bytes(Socket, BodySize), ExtrasSize, KeySize, Resp).
-    
+
 decode_response_header({error, Err}) -> {error, Err};
 decode_response_header(<<16#81:8, Opcode:8, KeySize:16, ExtrasSize:8, DataType:8, Status:16, BodySize:32, Opaque:32, CAS:64>>) ->
     #response{
-        op_code = Opcode, 
-        data_type = DataType, 
-        status = Status, 
-        opaque = Opaque, 
-        cas = CAS, 
+        op_code = Opcode,
+        data_type = DataType,
+        status = Status,
+        opaque = Opaque,
+        cas = CAS,
         key_size = KeySize,
         extras_size = ExtrasSize,
         body_size = BodySize
     }.
-    
+
 decode_response_body({error, Err}, _, _, _) -> {error, Err};
 decode_response_body(Bin, ExtrasSize, KeySize, Resp) ->
     <<Extras:ExtrasSize/binary, Key:KeySize/binary, Value/binary>> = Bin,

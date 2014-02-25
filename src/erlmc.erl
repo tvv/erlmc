@@ -1,4 +1,4 @@
-%% Copyright (c) 2009 
+%% Copyright (c) 2009
 %% Jacob Vorreuter <jacob.vorreuter@gmail.com>
 %%
 %% Permission is hereby granted, free of charge, to any person
@@ -31,9 +31,9 @@
          add_connection/2, remove_connection/2]).
 
 %% api callbacks
--export([get/1, get_many/1, add/2, add/3, set/2, set/3, 
-		 replace/2, replace/3, delete/1, increment/4, decrement/4,
-		 append/2, prepend/2, stats/0, stats/2, flush/0, flush/1, quit/0, 
+-export([get/1, get_many/1, add/2, add/3, add/4, set/2, set/3, set/4,
+		 replace/2, replace/3, replace/4, delete/1, increment/4, decrement/4,
+		 append/2, prepend/2, stats/0, stats/2, flush/0, flush/1, quit/0,
 		 version/0]).
 
 -include("erlmc.hrl").
@@ -50,27 +50,27 @@ start(CacheServers) when is_list(CacheServers) ->
 		{ok, _Pid} -> ok;
 		Error -> Error
 	end.
-	
+
 start_link() -> start_link([{"localhost", 11211, 1}]).
 start_link(CacheServers) when is_list(CacheServers) ->
 	random:seed(now()),
 	proc_lib:start_link(?MODULE, init, [self(), CacheServers], 5000).
-	
+
 add_server(Host, Port, PoolSize) ->
 	erlang:send(?MODULE, {add_server, Host, Port, PoolSize}),
 	ok.
-	
+
 refresh_server(Host, Port, PoolSize) ->
     erlang:send(?MODULE, {refresh_server, Host, Port, PoolSize}),
     ok.
-    
+
 remove_server(Host, Port) ->
 	erlang:send(?MODULE, {remove_server, Host, Port}),
 	ok.
 
 has_server(Host, Port) ->
     erlang:send(?MODULE, {has_server, self(), Host, Port}),
-    
+
     receive
         {has_server_result, B} when is_boolean(B) -> B
     after
@@ -80,18 +80,18 @@ has_server(Host, Port) ->
 add_connection(Host, Port) ->
 	erlang:send(?MODULE, {add_connection, Host, Port}),
 	ok.
-	
+
 remove_connection(Host, Port) ->
 	erlang:send(?MODULE, {remove_connection, Host, Port}),
 	ok.
-	
+
 get(Key0) ->
 	Key = package_key(Key0),
     call(map_key(Key), {get, Key}, ?TIMEOUT).
 
 get_many(Keys) ->
 	Self = self(),
-	Pids = [spawn(fun() -> 
+	Pids = [spawn(fun() ->
 		Res = (catch ?MODULE:get(Key)),
 		Self ! {self(), {Key, Res}}
 	 end) || Key <- Keys],
@@ -103,28 +103,40 @@ get_many(Keys) ->
 				Acc
 			end
 		end, [], Pids)).
-    
+
 add(Key, Value) ->
 	add(Key, Value, 0).
-	
+
 add(Key0, Value, Expiration) when is_binary(Value), is_integer(Expiration) ->
 	Key = package_key(Key0),
     call(map_key(Key), {add, Key, Value, Expiration}, ?TIMEOUT).
 
+add(Key0, Value, Flags, Expiration) when is_integer(Flags), is_binary(Value), is_integer(Expiration) ->
+    Key = package_key(Key0),
+    call(map_key(Key), {add, Key, Value, Flags, Expiration}, ?TIMEOUT).
+
 set(Key, Value) ->
 	set(Key, Value, 0).
-	
+
 set(Key0, Value, Expiration) when is_binary(Value), is_integer(Expiration) ->
 	Key = package_key(Key0),
     call(map_key(Key), {set, Key, Value, Expiration}, ?TIMEOUT).
-    
+
+set(Key0, Value, Flags, Expiration) when is_integer(Flags), is_binary(Value), is_integer(Expiration) ->
+    Key = package_key(Key0),
+    call(map_key(Key), {set, Key, Value, Flags, Expiration}, ?TIMEOUT).
+
 replace(Key, Value) ->
 	replace(Key, Value, 0).
-	
+
 replace(Key0, Value, Expiration) when is_binary(Value), is_integer(Expiration) ->
 	Key = package_key(Key0),
     call(map_key(Key), {replace, Key, Value, Expiration}, ?TIMEOUT).
-    
+
+replace(Key0, Value, Flags, Expiration) when is_integer(Flags), is_binary(Value), is_integer(Expiration) ->
+    Key = package_key(Key0),
+    call(map_key(Key), {replace, Key, Value, Flags, Expiration}, ?TIMEOUT).
+
 delete(Key0) ->
 	Key = package_key(Key0),
     call(map_key(Key), {delete, Key}, ?TIMEOUT).
@@ -153,17 +165,17 @@ stats(Host, Port) ->
 
 flush() ->
     multi_call(flush).
-    
+
 flush(Expiration) when is_integer(Expiration) ->
     multi_call({flush, Expiration}).
-    
+
 quit() ->
 	[begin
 		{Key, [
-			{'EXIT',{shutdown,{gen_server,call,[Pid,quit,?TIMEOUT]}}} == 
+			{'EXIT',{shutdown,{gen_server,call,[Pid,quit,?TIMEOUT]}}} ==
 				(catch gen_server:call(Pid, quit, ?TIMEOUT)) || Pid <- Pids]}
 	 end || {Key, Pids} <- unique_connections()].
-    
+
 version() ->
     multi_call(version).
 
@@ -182,28 +194,28 @@ call(Pid, Msg, Timeout) ->
 		{error, Error} -> exit({erlmc, Error});
 		Resp -> Resp
 	end.
-	
+
 %%--------------------------------------------------------------------
 %%% Stateful loop
-%%--------------------------------------------------------------------	
+%%--------------------------------------------------------------------
 init(Parent, CacheServers) ->
 	process_flag(trap_exit, true),
 	register(erlmc, self()),
 	ets:new(erlmc_continuum, [ordered_set, protected, named_table]),
 	ets:new(erlmc_connections, [bag, protected, named_table]),
-    
+
     %% Continuum = [{uint(), {Host, Port}}]
 	[add_server_to_continuum(Host, Port) || {Host, Port, _} <- CacheServers],
-        
+
     %% Connections = [{{Host,Port}, ConnPid}]
 	[begin
 		[start_connection(Host, Port) || _ <- lists:seq(1, ConnPoolSize)]
 	 end || {Host, Port, ConnPoolSize} <- CacheServers],
-        
+
 	proc_lib:init_ack(Parent, {ok, self()}),
-	
+
 	loop().
-	
+
 loop() ->
 	receive
 		{add_server, Host, Port, ConnPoolSize} ->
@@ -232,18 +244,18 @@ loop() ->
 			(catch gen_server:call(Pid, quit, ?TIMEOUT));
 		{'EXIT', Pid, Err} ->
 			case ets:match(erlmc_connections, {'$1', Pid}) of
-				[[{Host, Port}]] -> 
+				[[{Host, Port}]] ->
 					ets:delete_object(erlmc_connections, {{Host, Port}, Pid}),
 					case Err of
 						shutdown -> ok;
 						_ -> start_connection(Host, Port)
 					end;
-				_ -> 
+				_ ->
 					ok
 			end
 	end,
 	loop().
-	
+
 start_connection(Host, Port) ->
 	case erlmc_conn:start_link([Host, Port]) of
 		{ok, Pid} -> ets:insert(erlmc_connections, {{Host, Port}, Pid});
@@ -262,7 +274,7 @@ add_server_to_continuum(Host, Port) ->
 
 remove_server_from_continuum(Host, Port) ->
 	case ets:match(erlmc_continuum, {'$1', {Host, Port}}) of
-		[] -> 
+		[] ->
 			ok;
 		List ->
 			[ets:delete(erlmc_continuum, Key) || [Key] <- List]
@@ -270,7 +282,7 @@ remove_server_from_continuum(Host, Port) ->
 
 is_server_in_continuum(Host, Port) ->
     case ets:match(erlmc_continuum, {'$1', {Host, Port}}) of
-        [] -> 
+        [] ->
             false;
         _ ->
             true
@@ -309,7 +321,7 @@ unique_connection(Host, Port) ->
 %% and locate the next largest integer on the continuum. That integer
 %% represents the hashed server that the key maps to.
 %% reference: http://www8.org/w8-papers/2a-webserver/caching/paper2.html
-hash_to_uint(Key) when is_list(Key) -> 
+hash_to_uint(Key) when is_list(Key) ->
     <<Int:128/unsigned-integer>> = erlang:md5(Key), Int.
 
 %% @spec map_key(Key) -> Conn
@@ -317,7 +329,7 @@ hash_to_uint(Key) when is_list(Key) ->
 %%		 Conn = pid()
 map_key(Key) when is_list(Key) ->
 	First = ets:first(erlmc_continuum),
-    {Host, Port} = 
+    {Host, Port} =
 		case find_next_largest(hash_to_uint(Key), First) of
 			undefined ->
 				case First of
@@ -329,14 +341,14 @@ map_key(Key) when is_list(Key) ->
 			Value -> Value
 		end,
 	unique_connection(Host, Port).
-    
+
 %% @todo: use sorting algorithm to find next largest
-find_next_largest(_, '$end_of_table') -> 
+find_next_largest(_, '$end_of_table') ->
 	undefined;
 
 find_next_largest(Int, Key) when Key > Int ->
 	[{_, Val}] = ets:lookup(erlmc_continuum, Key),
 	Val;
-	
+
 find_next_largest(Int, Key) ->
 	find_next_largest(Int, ets:next(erlmc_continuum, Key)).
